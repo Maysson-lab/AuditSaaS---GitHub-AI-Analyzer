@@ -93,7 +93,11 @@ ${readmeContent.substring(0, 4000)}
           "X-Title": "AuditSaaS"
         },
         body: JSON.stringify({
-          model: model,
+          models: Array.from(new Set([
+            model,
+            "deepseek/deepseek-v4-flash:free",
+            "google/gemma-4-31b-it:free"
+          ])).slice(0, 3),
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt }
@@ -104,6 +108,12 @@ ${readmeContent.substring(0, 4000)}
       if (!openRouterRes.ok) {
         const errText = await openRouterRes.text();
         console.error("OpenRouter Error:", errText);
+        try {
+          const errObj = JSON.parse(errText);
+          if (errObj.error && errObj.error.message) {
+             return res.status(openRouterRes.status).json({ error: `OpenRouter: ${errObj.error.message}` });
+          }
+        } catch(e) {}
         return res.status(500).json({ error: "Error communicating with OpenRouter API. Check if your API key is valid and has credits." });
       }
 
