@@ -14,16 +14,16 @@ async function startServer() {
   // API Route for GitHub Audit
   app.post("/api/audit", async (req, res) => {
     try {
-      const { repoUrl, model, apiKey } = req.body;
+      const { repoUrl, model } = req.body;
       
       if (!repoUrl || !model) {
         return res.status(400).json({ error: "Missing repoUrl or model" });
       }
 
-      const openRouterKey = apiKey?.trim() || process.env.OPENROUTER_API_KEY;
+      const geminiApiKey = process.env.GEMINI_API_KEY;
 
-      if (!openRouterKey) {
-        return res.status(400).json({ error: "Veuillez fournir une clé API OpenRouter (ou la configurer dans les variables d'environnement)." });
+      if (!geminiApiKey) {
+        return res.status(500).json({ error: "Veuillez configurer GEMINI_API_KEY dans les variables d'environnement." });
       }
 
       // 1. Parse GitHub URL
@@ -117,90 +117,20 @@ ${codebaseMd.substring(0, 80000)}
 `;
 
       let rawContent = "";
-      let openRouterErrorData = null;
-      let openRouterErrorStatus = 500;
       
       try {
-        const openRouterRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${openRouterKey}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": process.env.APP_URL || "http://localhost:3000",
-            "X-Title": "AuditSaaS"
-          },
-          body: JSON.stringify({
-            models: Array.from(new Set([
-              model,
-              "qwen/qwen3-coder:free",
-              "meta-llama/llama-3.3-70b-instruct:free",
-              "google/gemma-2-9b-it:free",
-              "deepseek/deepseek-r1:free",
-              "mistralai/mistral-7b-instruct:free"
-            ])).slice(0, 3),
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userPrompt }
-            ]
-          })
+        const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+        // Assuming model is "gemini-2.5-flash" or "gemini-2.5-pro"
+        const finalModel = model.startsWith("gemini") ? model : "gemini-2.5-flash";
+        
+        const response = await ai.models.generateContent({
+           model: finalModel,
+           contents: [{ role: 'user', parts: [{ text: systemPrompt + '\n\n' + userPrompt }] }]
         });
-
-        if (!openRouterRes.ok) {
-          openRouterErrorStatus = openRouterRes.status;
-          openRouterErrorData = await openRouterRes.text();
-          throw new Error("OpenRouter HTTP Error");
-        }
-        
-        const aiData = await openRouterRes.json();
-        rawContent = aiData.choices[0].message.content;
+        rawContent = response.text || "";
       } catch (e) {
-        console.error("OpenRouter Error caught:", openRouterErrorData || e);
-        
-        // Fallback to Gemini if OpenRouter fails and GEMINI_API_KEY is available
-        if (process.env.GEMINI_API_KEY) {
-          console.log("OpenRouter error. Falling back to Gemini API...");
-          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-          const response = await ai.models.generateContent({
-             model: 'gemini-2.5-flash',
-             contents: [{ role: 'user', parts: [{ text: systemPrompt + '\n\n' + userPrompt }] }]
-          });
-          rawContent = response.text || "";
-        } else {
-           if (openRouterErrorData) {
-              try {
-                const errObj = JSON.parse(openRouterErrorData);
-                let extraMessage = "";
-                if (errObj.error?.metadata?.raw) {
-                  try {
-                     const rawStr = errObj.error.metadata.raw;
-                     const rawObj = JSON.parse(typeof rawStr === 'string' ? rawStr : JSON.stringify(rawStr));
-                     if (rawObj.error?.message) {
-                       extraMessage = JSON.stringify(rawObj.error.message);
-                     } else if (rawObj.error) {
-                       extraMessage = JSON.stringify(rawObj.error);
-                     }
-                  } catch(rawParseErr) {
-                     if (typeof errObj.error.metadata.raw === "string") extraMessage = errObj.error.metadata.raw;
-                  }
-                }
-                if (errObj.error && errObj.error.message) {
-                   const baseMsg = errObj.error.message;
-                   let finalMsg = baseMsg.includes("Provider returned error") && extraMessage 
-                        ? `Erreur du Fournisseur: ${extraMessage}` 
-                        : `${baseMsg} ${extraMessage ? '- ' + extraMessage : ''}`;
-                        
-                   if (errObj.error.code === 429) {
-                       finalMsg = "Le modèle est actuellement surchargé (Rate Limited) et aucune clé de secours n'est configurée. Attendez un instant ou utilisez votre propre clé OpenRouter.";
-                   } else if (errObj.error.code === 402) {
-                       finalMsg = "Crédits insuffisants sur le compte OpenRouter.";
-                   }
-                   
-                   return res.status(openRouterErrorStatus).json({ error: `OpenRouter : ${finalMsg}` });
-                }
-              } catch(parseErr) {}
-           }
-           return res.status(500).json({ error: "Erreur de communication avec l'API OpenRouter. Vérifiez votre clé ou réessayez plus tard." });
-        }
+        console.error("Gemini Error caught:", e);
+        return res.status(500).json({ error: "Erreur de communication avec l'API Gemini. Réessayez plus tard." });
       }
       
       // Clean up potential markdown fences if the model ignored instructions

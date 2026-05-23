@@ -5,7 +5,6 @@ import { AuditReport, SUPPORTED_MODELS } from '../types';
 export default function Dashboard() {
   const [repoUrl, setRepoUrl] = useState('');
   const [model, setModel] = useState(SUPPORTED_MODELS[0].id);
-  const [apiKey, setApiKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState<AuditReport | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -17,10 +16,6 @@ export default function Dashboard() {
       try {
         setHistory(JSON.parse(saved));
       } catch(e) {}
-    }
-    const savedKey = localStorage.getItem('openrouter_key');
-    if (savedKey) {
-      setApiKey(savedKey);
     }
   }, []);
 
@@ -55,7 +50,7 @@ export default function Dashboard() {
       const res = await fetch('/api/audit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repoUrl, model, apiKey })
+        body: JSON.stringify({ repoUrl, model })
       });
 
       const data = await res.json();
@@ -158,18 +153,6 @@ export default function Dashboard() {
                     required
                   />
                 </div>
-              </div>
-
-              <div className="flex flex-col items-start min-w-[180px] flex-shrink-0">
-                <label htmlFor="apiKey" className="text-[10px] uppercase font-bold text-slate-500 tracking-tighter block mb-1">Clé OpenRouter (Optionnel)</label>
-                <input
-                  type="password"
-                  id="apiKey"
-                  className="bg-white border border-slate-200 text-sm font-medium px-3 py-2 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 w-full outline-none placeholder-slate-300"
-                  placeholder="sk-or-v1-..."
-                  value={apiKey}
-                  onChange={(e) => handleKeyChange(e.target.value)}
-                />
               </div>
 
               <div className="flex flex-col items-start min-w-[200px] flex-shrink-0">
