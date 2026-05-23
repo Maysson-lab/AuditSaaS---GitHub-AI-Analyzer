@@ -41,13 +41,17 @@ async function startServer() {
         "Accept": "application/vnd.github.v3+json"
       };
 
-      const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers });
-      if (!repoRes.ok) {
-        return res.status(404).json({ error: "Repository not found or access denied." });
-      }
-      const repoData = await repoRes.json();
+      let repoData: any = { full_name: `${owner}/${repo}`, description: "Non spécifié", stargazers_count: "?", forks_count: "?", language: "Inconnu", open_issues_count: "?" };
+      try {
+        const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers });
+        if (repoRes.ok) {
+          repoData = await repoRes.json();
+        } else {
+          console.warn("GitHub API rate limit or not found, proceeding with default info");
+        }
+      } catch (e) {}
 
-      let readmeContent = "No README found.";
+      let readmeContent = "Aucun README trouvé.";
       try {
         const readmeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/readme`, { headers });
         if (readmeRes.ok) {
@@ -58,81 +62,55 @@ async function startServer() {
         console.warn("Could not fetch readme", e);
       }
 
-      // Fetch codebase summary
-      let codebaseMd = "Codebase not fetched.";
+      // Fetch codebase summary using repomix
+      let codebaseMd = "Codebase non récupérée.";
       try {
-        const treeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${repoData.default_branch}?recursive=1`, { headers });
-        if (treeRes.ok) {
-           const treeData = await treeRes.json();
-           const extAllowList = ['.ts', '.tsx', '.js', '.jsx', '.json', '.md', '.py', '.go', '.java', '.cpp', '.h', '.rs', '.css'];
-           const ignoreDirs = ['node_modules', '.git', 'dist', 'build', 'out', 'coverage', 'vendor', '__pycache__', 'public'];
-           
-           let files = (treeData.tree || []).filter((item: any) => {
-               if (item.type !== 'blob') return false;
-               if (ignoreDirs.some(ignored => item.path.includes(`${ignored}/`) || item.path.startsWith(`${ignored}/`))) return false;
-               
-               const ext = item.path.split('.').pop() ? '.' + item.path.split('.').pop() : '';
-               if (!extAllowList.includes(ext) && !['Dockerfile', 'Makefile'].includes(item.path.split('/').pop() || '')) return false;
-               if (item.size > 50000) return false;
-               return true;
-           });
-
-           files.sort((a: any, b: any) => {
-               const priorityScore = (f: any) => {
-                   let score = 0;
-                   if (f.path === 'package.json' || f.path === 'README.md') score += 100;
-                   if (f.path.startsWith('src/')) score += 50;
-                   if (f.path.includes('config') || f.path.includes('env')) score += 30;
-                   return score;
-               };
-               return priorityScore(b) - priorityScore(a) || a.size - b.size;
-           });
-
-           files = files.slice(0, 15);
-           
-           const fileContents = await Promise.all(files.map(async (file: any) => {
-               try {
-                   const fileRes = await fetch(file.url, { headers });
-                   if (!fileRes.ok) return null;
-                   const fileData = await fileRes.json();
-                   const content = Buffer.from(fileData.content, 'base64').toString('utf-8');
-                   return `## /${file.path}\n\`\`\`\n${content.substring(0, 3000)}\n\`\`\``;
-               } catch(e) { return null; }
-           }));
-
-           codebaseMd = `# Repository File Tree Extract\nShowing top ${files.length} relevant files.\n\n` + fileContents.filter(Boolean).join('\n\n');
+        const { execSync } = require('child_process');
+        const fs = require('fs');
+        const outputFilename = `repomix-${Date.now()}-${Math.floor(Math.random() * 1000)}.md`;
+        
+        // Exclude common bloated directories to keep the packed file lean
+        const ignorePatterns = "node_modules,dist,build,public,assets,docs,test,tests,coverage,vendor,*.min.js,*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml";
+        
+        console.log(`Running repomix for ${owner}/${repo}...`);
+        execSync(`npx repomix --remote ${owner}/${repo} --style markdown --output ${outputFilename} --ignore "${ignorePatterns}"`, { stdio: 'pipe' });
+        
+        if (fs.existsSync(outputFilename)) {
+          codebaseMd = fs.readFileSync(outputFilename, 'utf-8');
+          fs.unlinkSync(outputFilename);
         }
-      } catch (e) {
-        console.warn("Could not fetch codebase tree", e);
+      } catch (e: any) {
+        console.warn("Could not fetch codebase via repomix", e.message);
+        codebaseMd = "Failed to fetch full codebase. " + e.message;
       }
 
       // 3. Prepare OpenRouter LLM Call
-      const systemPrompt = `You are a Senior Software Engineer specializing in SaaS, architecture scalability, and AI systems. Your objective is to audit a GitHub repository based on its metadata, README, and the provided codebase extract.
-You MUST reply with ONLY a pure JSON object conforming to the following structure:
+      const systemPrompt = `Tu es un Senior Software Engineer spécialisé en SaaS, architecture, et IA. Ton objectif est d'auditer un dépôt GitHub basé sur ses métadonnées, son README, et l'extrait du code.
+Tu DOIS répondre UNIQUEMENT avec un objet JSON pur respectant cette structure, obligatoirement en FRANÇAIS :
 {
   "score": number (0-100),
-  "summary": "string (A concise overall verdict)",
+  "summary": "string (Verdict global concis)",
   "strengths": ["string", "string"],
   "weaknesses": ["string", "string"],
-  "security": { "score": number, "notes": "string" },
-  "architecture": { "score": number, "notes": "string" },
+  "security": { "score": number, "notes": "string (notes détaillées)" },
+  "architecture": { "score": number, "notes": "string (notes détaillées)" },
   "recommendations": ["string", "string"]
 }
-Do not include any markdown fences (like \`\`\`json) or extra text outside the JSON.`;
+Ne pas inclure de balises markdown (comme \`\`\`json) ou de texte supplémentaire en dehors du JSON. Les textes doivent être en français.`;
 
-      const userPrompt = `Please analyze the following repository:
-Name: ${repoData.full_name}
-Description: ${repoData.description || 'None'}
-Stars: ${repoData.stargazers_count}
+      const userPrompt = `Veuillez analyser le dépôt suivant :
+Nom: ${repoData.full_name}
+Description: ${repoData.description || 'Aucune'}
+Étoiles: ${repoData.stargazers_count}
 Forks: ${repoData.forks_count}
-Language: ${repoData.language}
-Open Issues: ${repoData.open_issues_count}
+Langage: ${repoData.language}
+Issues ouvertes: ${repoData.open_issues_count}
 
-README Snippet (first 4000 chars):
+Extrait du README (4000 premiers caractères) :
 ${readmeContent.substring(0, 4000)}
 
-Codebase Extract:
-${codebaseMd.substring(0, 50000)}
+Extrait du Code :
+${codebaseMd.substring(0, 80000)}
 `;
 
       const openRouterRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -144,11 +122,7 @@ ${codebaseMd.substring(0, 50000)}
           "X-Title": "AuditSaaS"
         },
         body: JSON.stringify({
-          models: Array.from(new Set([
-            model,
-            "deepseek/deepseek-v4-flash:free",
-            "google/gemma-4-31b-it:free"
-          ])).slice(0, 3),
+          model: model,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt }
@@ -164,14 +138,23 @@ ${codebaseMd.substring(0, 50000)}
           let extraMessage = "";
           if (errObj.error?.metadata?.raw) {
             try {
-               const rawObj = JSON.parse(errObj.error.metadata.raw);
-               if (rawObj.error?.message) extraMessage = " - " + rawObj.error.message;
+               const rawStr = errObj.error.metadata.raw;
+               const rawObj = JSON.parse(typeof rawStr === 'string' ? rawStr : JSON.stringify(rawStr));
+               if (rawObj.error?.message) {
+                 extraMessage = JSON.stringify(rawObj.error.message);
+               } else if (rawObj.error) {
+                 extraMessage = JSON.stringify(rawObj.error);
+               }
             } catch(e) {
-               if (typeof errObj.error.metadata.raw === "string") extraMessage = " - " + errObj.error.metadata.raw;
+               if (typeof errObj.error.metadata.raw === "string") extraMessage = errObj.error.metadata.raw;
             }
           }
           if (errObj.error && errObj.error.message) {
-             return res.status(openRouterRes.status).json({ error: `OpenRouter: ${errObj.error.message}${extraMessage}` });
+             const baseMsg = errObj.error.message;
+             const finalMsg = baseMsg.includes("Provider returned error") && extraMessage 
+                  ? `Provider Error: ${extraMessage}` 
+                  : `${baseMsg} ${extraMessage ? '- ' + extraMessage : ''}`;
+             return res.status(openRouterRes.status).json({ error: `OpenRouter: ${finalMsg}` });
           }
         } catch(e) {}
         return res.status(500).json({ error: "Error communicating with OpenRouter API. Check if your API key is valid and has credits." });
@@ -186,6 +169,9 @@ ${codebaseMd.substring(0, 50000)}
       let auditResult;
       try {
         auditResult = JSON.parse(cleanJsonStr);
+        auditResult.id = `${owner}-${repo}-${Date.now()}`;
+        auditResult.repoUrl = repoUrl;
+        auditResult.date = new Date().toISOString();
       } catch (parseError) {
         console.error("Failed to parse JSON:", rawContent);
         return res.status(500).json({ error: "The AI model returned an invalid response format.", raw: rawContent });
