@@ -1,3 +1,11 @@
+export interface RepoDetails {
+  stars: number;
+  forks: number;
+  language: string;
+  updatedAt: string;
+  description: string;
+}
+
 export interface AuditReport {
   id: string;
   repoUrl: string;
@@ -15,6 +23,7 @@ export interface AuditReport {
     notes: string;
   };
   recommendations: string[];
+  repoDetails?: RepoDetails;
 }
 
 export interface AnalysisData {

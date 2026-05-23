@@ -47,6 +47,28 @@ export default function Dashboard() {
     setReport(null);
 
     try {
+      let fetchedRepoDetails = undefined;
+      const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
+      if (match) {
+        const owner = match[1];
+        const repoName = match[2].replace(/\.git$/, '');
+        try {
+          const ghRes = await fetch(`https://api.github.com/repos/${owner}/${repoName}`);
+          if (ghRes.ok) {
+            const ghData = await ghRes.json();
+            fetchedRepoDetails = {
+              stars: ghData.stargazers_count,
+              forks: ghData.forks_count,
+              language: ghData.language || 'Non spécifié',
+              updatedAt: new Date(ghData.updated_at).toLocaleDateString(),
+              description: ghData.description || 'Aucune description'
+            };
+          }
+        } catch (e) {
+          console.error("Error fetching repo details", e);
+        }
+      }
+
       const res = await fetch('/api/audit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -57,6 +79,10 @@ export default function Dashboard() {
       
       if (!res.ok) {
         throw new Error(data.error || "Échec de l'analyse du dépôt");
+      }
+
+      if (fetchedRepoDetails) {
+        data.repoDetails = fetchedRepoDetails;
       }
 
       setReport(data);
@@ -215,6 +241,37 @@ export default function Dashboard() {
           {/* Results */}
           {report && !loading && (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 pb-10">
+              
+              {/* Repo Details Panel */}
+              {report.repoDetails && (
+                <div className="mb-6 bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                      <h2 className="text-sm font-bold text-slate-800 break-all">{report.repoUrl}</h2>
+                      <p className="text-xs text-slate-500 mt-1">{report.repoDetails.description}</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-6 text-xs font-semibold text-slate-600 shrink-0">
+                      <div className="flex flex-col items-center">
+                        <span className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">Étoiles</span>
+                        <span>⭐ {report.repoDetails.stars}</span>
+                      </div>
+                      <div className="flex flex-col items-center">
+                        <span className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">Forks</span>
+                        <span>{report.repoDetails.forks}</span>
+                      </div>
+                      <div className="flex flex-col items-center">
+                        <span className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">Langage</span>
+                        <span>{report.repoDetails.language}</span>
+                      </div>
+                      <div className="flex flex-col items-center">
+                        <span className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">Dernière MAJ</span>
+                        <span>{report.repoDetails.updatedAt}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Top Stats Row */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
                 <ScoreRing score={report.score} label="Score de Santé" />
