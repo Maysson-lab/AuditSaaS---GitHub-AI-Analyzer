@@ -58,8 +58,56 @@ async function startServer() {
         console.warn("Could not fetch readme", e);
       }
 
+      // Fetch codebase summary
+      let codebaseMd = "Codebase not fetched.";
+      try {
+        const treeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${repoData.default_branch}?recursive=1`, { headers });
+        if (treeRes.ok) {
+           const treeData = await treeRes.json();
+           const extAllowList = ['.ts', '.tsx', '.js', '.jsx', '.json', '.md', '.py', '.go', '.java', '.cpp', '.h', '.rs', '.css'];
+           const ignoreDirs = ['node_modules', '.git', 'dist', 'build', 'out', 'coverage', 'vendor', '__pycache__', 'public'];
+           
+           let files = (treeData.tree || []).filter((item: any) => {
+               if (item.type !== 'blob') return false;
+               if (ignoreDirs.some(ignored => item.path.includes(`${ignored}/`) || item.path.startsWith(`${ignored}/`))) return false;
+               
+               const ext = item.path.split('.').pop() ? '.' + item.path.split('.').pop() : '';
+               if (!extAllowList.includes(ext) && !['Dockerfile', 'Makefile'].includes(item.path.split('/').pop() || '')) return false;
+               if (item.size > 50000) return false;
+               return true;
+           });
+
+           files.sort((a: any, b: any) => {
+               const priorityScore = (f: any) => {
+                   let score = 0;
+                   if (f.path === 'package.json' || f.path === 'README.md') score += 100;
+                   if (f.path.startsWith('src/')) score += 50;
+                   if (f.path.includes('config') || f.path.includes('env')) score += 30;
+                   return score;
+               };
+               return priorityScore(b) - priorityScore(a) || a.size - b.size;
+           });
+
+           files = files.slice(0, 15);
+           
+           const fileContents = await Promise.all(files.map(async (file: any) => {
+               try {
+                   const fileRes = await fetch(file.url, { headers });
+                   if (!fileRes.ok) return null;
+                   const fileData = await fileRes.json();
+                   const content = Buffer.from(fileData.content, 'base64').toString('utf-8');
+                   return `## /${file.path}\n\`\`\`\n${content.substring(0, 3000)}\n\`\`\``;
+               } catch(e) { return null; }
+           }));
+
+           codebaseMd = `# Repository File Tree Extract\nShowing top ${files.length} relevant files.\n\n` + fileContents.filter(Boolean).join('\n\n');
+        }
+      } catch (e) {
+        console.warn("Could not fetch codebase tree", e);
+      }
+
       // 3. Prepare OpenRouter LLM Call
-      const systemPrompt = `You are a Senior Software Engineer specializing in SaaS, architecture scalability, and AI systems. Your objective is to audit a GitHub repository based on its metadata and README file content.
+      const systemPrompt = `You are a Senior Software Engineer specializing in SaaS, architecture scalability, and AI systems. Your objective is to audit a GitHub repository based on its metadata, README, and the provided codebase extract.
 You MUST reply with ONLY a pure JSON object conforming to the following structure:
 {
   "score": number (0-100),
@@ -82,6 +130,9 @@ Open Issues: ${repoData.open_issues_count}
 
 README Snippet (first 4000 chars):
 ${readmeContent.substring(0, 4000)}
+
+Codebase Extract:
+${codebaseMd.substring(0, 50000)}
 `;
 
       const openRouterRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -110,8 +161,17 @@ ${readmeContent.substring(0, 4000)}
         console.error("OpenRouter Error:", errText);
         try {
           const errObj = JSON.parse(errText);
+          let extraMessage = "";
+          if (errObj.error?.metadata?.raw) {
+            try {
+               const rawObj = JSON.parse(errObj.error.metadata.raw);
+               if (rawObj.error?.message) extraMessage = " - " + rawObj.error.message;
+            } catch(e) {
+               if (typeof errObj.error.metadata.raw === "string") extraMessage = " - " + errObj.error.metadata.raw;
+            }
+          }
           if (errObj.error && errObj.error.message) {
-             return res.status(openRouterRes.status).json({ error: `OpenRouter: ${errObj.error.message}` });
+             return res.status(openRouterRes.status).json({ error: `OpenRouter: ${errObj.error.message}${extraMessage}` });
           }
         } catch(e) {}
         return res.status(500).json({ error: "Error communicating with OpenRouter API. Check if your API key is valid and has credits." });
