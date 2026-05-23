@@ -1,0 +1,6 @@
+{
+  "name": "AuditSaaS - GitHub AI Analyzer",
+  "description": "A SaaS platform that analyzes GitHub repositories and generates comprehensive technical audits using different AI models via OpenRouter.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
