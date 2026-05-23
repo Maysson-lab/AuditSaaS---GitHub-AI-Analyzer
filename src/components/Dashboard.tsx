@@ -5,6 +5,7 @@ import { AuditReport, SUPPORTED_MODELS } from '../types';
 export default function Dashboard() {
   const [repoUrl, setRepoUrl] = useState('');
   const [model, setModel] = useState(SUPPORTED_MODELS[0].id);
+  const [apiKey, setApiKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState<AuditReport | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -17,6 +18,10 @@ export default function Dashboard() {
         setHistory(JSON.parse(saved));
       } catch(e) {}
     }
+    const savedKey = localStorage.getItem('openrouter_key');
+    if (savedKey) {
+      setApiKey(savedKey);
+    }
   }, []);
 
   const saveToHistory = (newReport: AuditReport) => {
@@ -25,6 +30,11 @@ export default function Dashboard() {
       localStorage.setItem('audit_history', JSON.stringify(newHistory));
       return newHistory;
     });
+  };
+
+  const handleKeyChange = (val: string) => {
+    setApiKey(val);
+    localStorage.setItem('openrouter_key', val);
   };
 
   const loadHistory = (item: AuditReport) => {
@@ -45,7 +55,7 @@ export default function Dashboard() {
       const res = await fetch('/api/audit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repoUrl, model })
+        body: JSON.stringify({ repoUrl, model, apiKey })
       });
 
       const data = await res.json();
@@ -129,57 +139,71 @@ export default function Dashboard() {
 
         <div className="flex-1 p-6 overflow-y-auto overflow-x-hidden min-w-0 max-w-6xl mx-auto w-full">
           {/* Form Controls Area */}
-          <form onSubmit={handleAnalyze} className="mb-6 bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-wrap lg:flex-nowrap items-end gap-4 w-full">
-            <div className="flex-1 min-w-[240px]">
-              <label htmlFor="repoUrl" className="text-[10px] uppercase font-bold text-slate-500 tracking-tighter block mb-1">Dépôt Cible</label>
-              <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-                <span className="text-slate-400 mr-2 text-sm shrink-0">https://github.com/</span>
-                <input
-                  type="text"
-                  id="repoUrl"
-                  className="bg-transparent border-none text-sm font-medium focus:ring-0 flex-1 p-0 outline-none w-full min-w-[100px]"
-                  placeholder="facebook/react"
-                  value={repoUrl.replace('https://github.com/', '')}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setRepoUrl(val.startsWith('http') ? val : `https://github.com/${val}`);
-                  }}
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-col items-start min-w-[200px] flex-shrink-0">
-              <label htmlFor="model" className="text-[10px] uppercase font-bold text-slate-500 tracking-tighter block mb-1">Modèle d'Analyse</label>
-              <div className="relative w-full">
-                <select
-                  id="model"
-                  className="bg-white border border-slate-200 text-xs font-semibold py-2 px-3 pr-8 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 w-full outline-none appearance-none"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                >
-                  {SUPPORTED_MODELS.map(m => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </select>
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500">
-                  <svg className="w-3 h-3 fill-current" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>
+          <form onSubmit={handleAnalyze} className="mb-6 bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col gap-4 w-full">
+            <div className="flex flex-wrap lg:flex-nowrap items-end gap-4 w-full">
+              <div className="flex-1 min-w-[240px]">
+                <label htmlFor="repoUrl" className="text-[10px] uppercase font-bold text-slate-500 tracking-tighter block mb-1">Dépôt Cible</label>
+                <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                  <span className="text-slate-400 mr-2 text-sm shrink-0">https://github.com/</span>
+                  <input
+                    type="text"
+                    id="repoUrl"
+                    className="bg-transparent border-none text-sm font-medium focus:ring-0 flex-1 p-0 outline-none w-full min-w-[100px]"
+                    placeholder="facebook/react"
+                    value={repoUrl.replace('https://github.com/', '')}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setRepoUrl(val.startsWith('http') ? val : `https://github.com/${val}`);
+                    }}
+                    required
+                  />
                 </div>
               </div>
-            </div>
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg text-sm font-bold shadow-lg shadow-indigo-200 flex items-center justify-center gap-2 h-[36px] min-w-[150px] disabled:opacity-70 transition-colors flex-shrink-0"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="animate-spin -ml-1 mr-2 h-4 w-4" />
-                  Audit en cours...
-                </>
-              ) : 'Lancer l\'Audit'}
-            </button>
+              <div className="flex flex-col items-start min-w-[180px] flex-shrink-0">
+                <label htmlFor="apiKey" className="text-[10px] uppercase font-bold text-slate-500 tracking-tighter block mb-1">Clé OpenRouter (Optionnel)</label>
+                <input
+                  type="password"
+                  id="apiKey"
+                  className="bg-white border border-slate-200 text-sm font-medium px-3 py-2 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 w-full outline-none placeholder-slate-300"
+                  placeholder="sk-or-v1-..."
+                  value={apiKey}
+                  onChange={(e) => handleKeyChange(e.target.value)}
+                />
+              </div>
+
+              <div className="flex flex-col items-start min-w-[200px] flex-shrink-0">
+                <label htmlFor="model" className="text-[10px] uppercase font-bold text-slate-500 tracking-tighter block mb-1">Modèle d'Analyse</label>
+                <div className="relative w-full">
+                  <select
+                    id="model"
+                    className="bg-white border border-slate-200 text-sm font-semibold py-2 px-3 pr-8 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 w-full outline-none appearance-none"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                  >
+                    {SUPPORTED_MODELS.map(m => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </select>
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500">
+                    <svg className="w-4 h-4 fill-current" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-lg text-sm font-bold shadow-lg shadow-indigo-200 flex items-center justify-center gap-2 h-[38px] min-w-[150px] disabled:opacity-70 transition-colors flex-shrink-0"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="animate-spin -ml-1 mr-2 h-4 w-4" />
+                    Audit...
+                  </>
+                ) : 'Lancer l\'Audit'}
+              </button>
+            </div>
           </form>
 
           {/* Error State */}

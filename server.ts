@@ -1,6 +1,9 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
+import { execSync } from "child_process";
+import fs from "fs";
+import { GoogleGenAI } from "@google/genai";
 
 const PORT = 3000;
 
@@ -11,14 +14,16 @@ async function startServer() {
   // API Route for GitHub Audit
   app.post("/api/audit", async (req, res) => {
     try {
-      const { repoUrl, model } = req.body;
+      const { repoUrl, model, apiKey } = req.body;
       
       if (!repoUrl || !model) {
         return res.status(400).json({ error: "Missing repoUrl or model" });
       }
 
-      if (!process.env.OPENROUTER_API_KEY) {
-        return res.status(500).json({ error: "OPENROUTER_API_KEY is missing in environment variables" });
+      const openRouterKey = apiKey?.trim() || process.env.OPENROUTER_API_KEY;
+
+      if (!openRouterKey) {
+        return res.status(400).json({ error: "Veuillez fournir une clé API OpenRouter (ou la configurer dans les variables d'environnement)." });
       }
 
       // 1. Parse GitHub URL
@@ -65,8 +70,6 @@ async function startServer() {
       // Fetch codebase summary using repomix
       let codebaseMd = "Codebase non récupérée.";
       try {
-        const { execSync } = require('child_process');
-        const fs = require('fs');
         const outputFilename = `repomix-${Date.now()}-${Math.floor(Math.random() * 1000)}.md`;
         
         // Exclude common bloated directories to keep the packed file lean
@@ -113,55 +116,92 @@ Extrait du Code :
 ${codebaseMd.substring(0, 80000)}
 `;
 
-      const openRouterRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": process.env.APP_URL || "http://localhost:3000",
-          "X-Title": "AuditSaaS"
-        },
-        body: JSON.stringify({
-          model: model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt }
-          ]
-        })
-      });
+      let rawContent = "";
+      let openRouterErrorData = null;
+      let openRouterErrorStatus = 500;
+      
+      try {
+        const openRouterRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${openRouterKey}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": process.env.APP_URL || "http://localhost:3000",
+            "X-Title": "AuditSaaS"
+          },
+          body: JSON.stringify({
+            models: Array.from(new Set([
+              model,
+              "qwen/qwen3-coder:free",
+              "meta-llama/llama-3.3-70b-instruct:free",
+              "google/gemma-2-9b-it:free",
+              "deepseek/deepseek-r1:free",
+              "mistralai/mistral-7b-instruct:free"
+            ])).slice(0, 3),
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt }
+            ]
+          })
+        });
 
-      if (!openRouterRes.ok) {
-        const errText = await openRouterRes.text();
-        console.error("OpenRouter Error:", errText);
-        try {
-          const errObj = JSON.parse(errText);
-          let extraMessage = "";
-          if (errObj.error?.metadata?.raw) {
-            try {
-               const rawStr = errObj.error.metadata.raw;
-               const rawObj = JSON.parse(typeof rawStr === 'string' ? rawStr : JSON.stringify(rawStr));
-               if (rawObj.error?.message) {
-                 extraMessage = JSON.stringify(rawObj.error.message);
-               } else if (rawObj.error) {
-                 extraMessage = JSON.stringify(rawObj.error);
-               }
-            } catch(e) {
-               if (typeof errObj.error.metadata.raw === "string") extraMessage = errObj.error.metadata.raw;
-            }
-          }
-          if (errObj.error && errObj.error.message) {
-             const baseMsg = errObj.error.message;
-             const finalMsg = baseMsg.includes("Provider returned error") && extraMessage 
-                  ? `Provider Error: ${extraMessage}` 
-                  : `${baseMsg} ${extraMessage ? '- ' + extraMessage : ''}`;
-             return res.status(openRouterRes.status).json({ error: `OpenRouter: ${finalMsg}` });
-          }
-        } catch(e) {}
-        return res.status(500).json({ error: "Error communicating with OpenRouter API. Check if your API key is valid and has credits." });
+        if (!openRouterRes.ok) {
+          openRouterErrorStatus = openRouterRes.status;
+          openRouterErrorData = await openRouterRes.text();
+          throw new Error("OpenRouter HTTP Error");
+        }
+        
+        const aiData = await openRouterRes.json();
+        rawContent = aiData.choices[0].message.content;
+      } catch (e) {
+        console.error("OpenRouter Error caught:", openRouterErrorData || e);
+        
+        // Fallback to Gemini if OpenRouter fails and GEMINI_API_KEY is available
+        if (process.env.GEMINI_API_KEY) {
+          console.log("OpenRouter error. Falling back to Gemini API...");
+          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+          const response = await ai.models.generateContent({
+             model: 'gemini-2.5-flash',
+             contents: [{ role: 'user', parts: [{ text: systemPrompt + '\n\n' + userPrompt }] }]
+          });
+          rawContent = response.text || "";
+        } else {
+           if (openRouterErrorData) {
+              try {
+                const errObj = JSON.parse(openRouterErrorData);
+                let extraMessage = "";
+                if (errObj.error?.metadata?.raw) {
+                  try {
+                     const rawStr = errObj.error.metadata.raw;
+                     const rawObj = JSON.parse(typeof rawStr === 'string' ? rawStr : JSON.stringify(rawStr));
+                     if (rawObj.error?.message) {
+                       extraMessage = JSON.stringify(rawObj.error.message);
+                     } else if (rawObj.error) {
+                       extraMessage = JSON.stringify(rawObj.error);
+                     }
+                  } catch(rawParseErr) {
+                     if (typeof errObj.error.metadata.raw === "string") extraMessage = errObj.error.metadata.raw;
+                  }
+                }
+                if (errObj.error && errObj.error.message) {
+                   const baseMsg = errObj.error.message;
+                   let finalMsg = baseMsg.includes("Provider returned error") && extraMessage 
+                        ? `Erreur du Fournisseur: ${extraMessage}` 
+                        : `${baseMsg} ${extraMessage ? '- ' + extraMessage : ''}`;
+                        
+                   if (errObj.error.code === 429) {
+                       finalMsg = "Le modèle est actuellement surchargé (Rate Limited) et aucune clé de secours n'est configurée. Attendez un instant ou utilisez votre propre clé OpenRouter.";
+                   } else if (errObj.error.code === 402) {
+                       finalMsg = "Crédits insuffisants sur le compte OpenRouter.";
+                   }
+                   
+                   return res.status(openRouterErrorStatus).json({ error: `OpenRouter : ${finalMsg}` });
+                }
+              } catch(parseErr) {}
+           }
+           return res.status(500).json({ error: "Erreur de communication avec l'API OpenRouter. Vérifiez votre clé ou réessayez plus tard." });
+        }
       }
-
-      const aiData = await openRouterRes.json();
-      const rawContent = aiData.choices[0].message.content;
       
       // Clean up potential markdown fences if the model ignored instructions
       const cleanJsonStr = rawContent.replace(/^```json/m, '').replace(/^```/m, '').replace(/```$/m, '').trim();
