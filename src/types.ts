@@ -21,10 +21,10 @@ export interface AnalysisData {
 
 export const SUPPORTED_MODELS = [
   // Free / Highly Performant Models
-  { id: 'google/gemini-2.0-flash-lite-preview-02-05:free', name: 'Gemini 2.0 Flash Lite (Free)' },
   { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B (Free)' },
-  { id: 'mistralai/mistral-7b-instruct:free', name: 'Mistral 7B (Free)' },
-  { id: 'microsoft/phi-3-mini-128k-instruct:free', name: 'Phi-3 Mini (Free)' },
+  { id: 'deepseek/deepseek-v4-flash:free', name: 'DeepSeek V4 Flash (Free)' },
+  { id: 'google/gemma-4-31b-it:free', name: 'Gemma 4 31B (Free)' },
+  { id: 'qwen/qwen3-coder:free', name: 'Qwen 3 Coder (Free)' },
   
   // Premium Models
   { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet (Pro)' },
