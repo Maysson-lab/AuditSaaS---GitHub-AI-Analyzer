@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Loader2, GitBranch, Shield, Activity, CheckCircle2, XCircle, ChevronRight, Clock } from 'lucide-react';
+import { Search, Loader2, GitBranch, Shield, Activity, CheckCircle2, XCircle, ChevronRight, Clock, GitCompare } from 'lucide-react';
 import { AuditReport, SUPPORTED_MODELS } from '../types';
 
 export default function Dashboard() {
   const [repoUrl, setRepoUrl] = useState('');
+  const [repoUrl2, setRepoUrl2] = useState('');
+  const [isComparing, setIsComparing] = useState(false);
   const [model, setModel] = useState(SUPPORTED_MODELS[0].id);
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState<AuditReport | null>(null);
@@ -27,14 +29,18 @@ export default function Dashboard() {
     });
   };
 
-  const handleKeyChange = (val: string) => {
-    setApiKey(val);
-    localStorage.setItem('openrouter_key', val);
-  };
-
   const loadHistory = (item: AuditReport) => {
     setReport(item);
-    setRepoUrl(item.repoUrl);
+    if (item.repoUrl.includes(" VS ")) {
+       const parts = item.repoUrl.split(" VS ");
+       setRepoUrl(parts[0]);
+       setRepoUrl2(parts[1]);
+       setIsComparing(true);
+    } else {
+       setRepoUrl(item.repoUrl);
+       setRepoUrl2('');
+       setIsComparing(false);
+    }
     setError(null);
   };
 
@@ -72,7 +78,7 @@ export default function Dashboard() {
       const res = await fetch('/api/audit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repoUrl, model })
+        body: JSON.stringify({ repoUrl, repoUrl2: isComparing ? repoUrl2 : undefined, model })
       });
 
       const data = await res.json();
@@ -81,7 +87,7 @@ export default function Dashboard() {
         throw new Error(data.error || "Échec de l'analyse du dépôt");
       }
 
-      if (fetchedRepoDetails) {
+      if (fetchedRepoDetails && !isComparing) {
         data.repoDetails = fetchedRepoDetails;
       }
 
@@ -161,27 +167,63 @@ export default function Dashboard() {
         <div className="flex-1 p-6 overflow-y-auto overflow-x-hidden min-w-0 max-w-6xl mx-auto w-full">
           {/* Form Controls Area */}
           <form onSubmit={handleAnalyze} className="mb-6 bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col gap-4 w-full">
-            <div className="flex flex-wrap lg:flex-nowrap items-end gap-4 w-full">
-              <div className="flex-1 min-w-[240px]">
-                <label htmlFor="repoUrl" className="text-[10px] uppercase font-bold text-slate-500 tracking-tighter block mb-1">Dépôt Cible</label>
-                <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-                  <span className="text-slate-400 mr-2 text-sm shrink-0">https://github.com/</span>
-                  <input
-                    type="text"
-                    id="repoUrl"
-                    className="bg-transparent border-none text-sm font-medium focus:ring-0 flex-1 p-0 outline-none w-full min-w-[100px]"
-                    placeholder="facebook/react"
-                    value={repoUrl.replace('https://github.com/', '')}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setRepoUrl(val.startsWith('http') ? val : `https://github.com/${val}`);
-                    }}
-                    required
-                  />
+            <div className="flex flex-col lg:flex-row items-start lg:items-end gap-4 w-full">
+              
+              <div className="flex-1 w-full min-w-[240px] flex flex-col gap-3">
+                <div>
+                  <label htmlFor="repoUrl" className="text-[10px] uppercase font-bold text-slate-500 tracking-tighter block mb-1">Dépôt {isComparing && "1"} Cible</label>
+                  <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                    <span className="text-slate-400 mr-2 text-sm shrink-0">https://github.com/</span>
+                    <input
+                      type="text"
+                      id="repoUrl"
+                      className="bg-transparent border-none text-sm font-medium focus:ring-0 flex-1 p-0 outline-none w-full min-w-[100px]"
+                      placeholder="facebook/react"
+                      value={repoUrl.replace('https://github.com/', '')}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setRepoUrl(val.startsWith('http') ? val : `https://github.com/${val}`);
+                      }}
+                      required
+                    />
+                  </div>
+                </div>
+
+                {isComparing && (
+                  <div className="animate-in fade-in slide-in-from-top-2">
+                    <label htmlFor="repoUrl2" className="text-[10px] uppercase font-bold text-slate-500 tracking-tighter block mb-1">Dépôt 2 (À Comparer)</label>
+                    <div className="flex items-center bg-slate-50 border border-indigo-200 rounded-lg px-3 py-2 ring-1 ring-indigo-100">
+                      <span className="text-slate-400 mr-2 text-sm shrink-0">https://github.com/</span>
+                      <input
+                        type="text"
+                        id="repoUrl2"
+                        className="bg-transparent border-none text-sm font-medium focus:ring-0 flex-1 p-0 outline-none w-full min-w-[100px]"
+                        placeholder="TanStack/router"
+                        value={repoUrl2.replace('https://github.com/', '')}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setRepoUrl2(val.startsWith('http') ? val : `https://github.com/${val}`);
+                        }}
+                        required={isComparing}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col items-start min-w-[180px] w-full lg:w-auto flex-shrink-0">
+                <label className="text-[10px] uppercase font-bold text-slate-500 tracking-tighter block mb-1">Mode d'Analyse</label>
+                <div className="flex items-center gap-2 h-[38px] cursor-pointer" onClick={() => setIsComparing(!isComparing)}>
+                  <div className={`w-10 h-5 rounded-full relative transition-colors ${isComparing ? 'bg-indigo-500' : 'bg-slate-300'}`}>
+                    <div className={`w-3 h-3 rounded-full bg-white absolute top-1 transition-transform ${isComparing ? 'translate-x-6' : 'translate-x-1'}`} />
+                  </div>
+                  <span className="text-xs font-bold text-slate-600 flex items-center gap-1">
+                    <GitCompare className="w-3.5 h-3.5" /> Comparaison
+                  </span>
                 </div>
               </div>
 
-              <div className="flex flex-col items-start min-w-[200px] flex-shrink-0">
+              <div className="flex flex-col items-start min-w-[200px] w-full lg:w-auto flex-shrink-0">
                 <label htmlFor="model" className="text-[10px] uppercase font-bold text-slate-500 tracking-tighter block mb-1">Modèle d'Analyse</label>
                 <div className="relative w-full">
                   <select
@@ -203,7 +245,7 @@ export default function Dashboard() {
               <button
                 type="submit"
                 disabled={loading}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-lg text-sm font-bold shadow-lg shadow-indigo-200 flex items-center justify-center gap-2 h-[38px] min-w-[150px] disabled:opacity-70 transition-colors flex-shrink-0"
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-lg text-sm font-bold shadow-lg shadow-indigo-200 flex items-center justify-center gap-2 h-[38px] min-w-[150px] w-full lg:w-auto disabled:opacity-70 transition-colors flex-shrink-0"
               >
                 {loading ? (
                   <>

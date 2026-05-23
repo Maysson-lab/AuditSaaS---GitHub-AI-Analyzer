@@ -3,9 +3,38 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { execSync } from "child_process";
 import fs from "fs";
+import os from "os";
 import { GoogleGenAI } from "@google/genai";
 
 const PORT = 3000;
+
+async function runNpmAudit(owner: string, repo: string): Promise<string> {
+  try {
+     const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/package.json`);
+     if (!res.ok) return "Aucun package.json trouvé ou erreur API.";
+     const data = await res.json();
+     if (data.content) {
+        const packageJsonStr = Buffer.from(data.content, 'base64').toString('utf-8');
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'npm-audit-'));
+        fs.writeFileSync(path.join(tmpDir, 'package.json'), packageJsonStr);
+        try {
+           execSync('npm install --package-lock-only --ignore-scripts', { cwd: tmpDir, stdio: 'ignore' });
+           const auditOutput = execSync('npm audit --json', { cwd: tmpDir }).toString();
+           return auditOutput;
+        } catch (auditErr: any) {
+           if (auditErr.stdout) {
+              return auditErr.stdout.toString();
+           }
+           return "Erreur d'audit : " + auditErr.message;
+        } finally {
+           fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+     }
+  } catch(e: any) {
+     return "Impossible d'exécuter npm audit: " + e.message;
+  }
+  return "Non applicable.";
+}
 
 async function startServer() {
   const app = express();
@@ -14,7 +43,7 @@ async function startServer() {
   // API Route for GitHub Audit
   app.post("/api/audit", async (req, res) => {
     try {
-      const { repoUrl, model } = req.body;
+      const { repoUrl, repoUrl2, model } = req.body;
       
       if (!repoUrl || !model) {
         return res.status(400).json({ error: "Missing repoUrl or model" });
@@ -26,124 +55,178 @@ async function startServer() {
         return res.status(500).json({ error: "Veuillez configurer GEMINI_API_KEY dans les variables d'environnement." });
       }
 
-      // 1. Parse GitHub URL
-      let owner = "", repo = "";
-      try {
-        const urlObj = new URL(repoUrl);
-        const parts = urlObj.pathname.split("/").filter(Boolean);
-        if (urlObj.hostname !== "github.com" || parts.length < 2) {
-          throw new Error("Invalid GitHub URL");
-        }
-        owner = parts[0];
-        repo = parts[1];
-      } catch (err) {
-        return res.status(400).json({ error: "Please enter a valid GitHub repository URL (e.g., https://github.com/facebook/react)" });
+      const parseUrl = (url: string) => {
+        try {
+          const urlObj = new URL(url);
+          const parts = urlObj.pathname.split("/").filter(Boolean);
+          if (urlObj.hostname !== "github.com" || parts.length < 2) return null;
+          return { owner: parts[0], repo: parts[1].replace(/\.git$/, '') };
+        } catch(e) { return null; }
       }
 
-      // 2. Fetch Repo Details from GitHub
+      const p1 = parseUrl(repoUrl);
+      if (!p1) return res.status(400).json({ error: "Invalid GitHub URL" });
+      const { owner, repo } = p1;
+
+      let owner2 = "", repo2 = "";
+      if (repoUrl2) {
+        const p2 = parseUrl(repoUrl2);
+        if (!p2) return res.status(400).json({ error: "Invalid secondary GitHub URL" });
+        owner2 = p2.owner;
+        repo2 = p2.repo;
+      }
+
       const headers = { 
         "User-Agent": "AuditSaaS-App",
         "Accept": "application/vnd.github.v3+json"
       };
 
-      let repoData: any = { full_name: `${owner}/${repo}`, description: "Non spécifié", stargazers_count: "?", forks_count: "?", language: "Inconnu", open_issues_count: "?" };
-      try {
-        const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers });
-        if (repoRes.ok) {
-          repoData = await repoRes.json();
-        } else {
-          console.warn("GitHub API rate limit or not found, proceeding with default info");
-        }
-      } catch (e) {}
+      const fetchMetadata = async (o: string, r: string) => {
+        let repoData: any = { full_name: `${o}/${r}`, description: "Non spécifié", stargazers_count: "?", forks_count: "?", language: "Inconnu", open_issues_count: "?" };
+        try {
+          const repoRes = await fetch(`https://api.github.com/repos/${o}/${r}`, { headers });
+          if (repoRes.ok) repoData = await repoRes.json();
+        } catch (e) {}
 
-      let readmeContent = "Aucun README trouvé.";
-      try {
-        const readmeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/readme`, { headers });
-        if (readmeRes.ok) {
-          const readmeJson = await readmeRes.json();
-          readmeContent = Buffer.from(readmeJson.content, 'base64').toString('utf-8');
+        let readmeContent = "Aucun README trouvé.";
+        try {
+          const readmeRes = await fetch(`https://api.github.com/repos/${o}/${r}/readme`, { headers });
+          if (readmeRes.ok) {
+            const readmeJson = await readmeRes.json();
+            readmeContent = Buffer.from(readmeJson.content, 'base64').toString('utf-8');
+          }
+        } catch (e) {}
+        
+        return { repoData, readmeContent };
+      };
+
+      const [data1, data2] = await Promise.all([
+        fetchMetadata(owner, repo),
+        repoUrl2 ? fetchMetadata(owner2, repo2) : Promise.resolve(null)
+      ]);
+
+      const fetchCodebase = (o: string, r: string) => {
+        let codebaseMd = "Codebase non récupérée.";
+        try {
+          const outputFilename = `repomix-${Date.now()}-${Math.floor(Math.random() * 1000)}.md`;
+          const ignorePatterns = "node_modules,dist,build,public,assets,docs,test,tests,coverage,vendor,*.min.js,*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml";
+          execSync(`npx repomix --remote ${o}/${r} --style markdown --output ${outputFilename} --ignore "${ignorePatterns}"`, { stdio: 'pipe' });
+          
+          if (fs.existsSync(outputFilename)) {
+            const fullContent = fs.readFileSync(outputFilename, 'utf-8');
+            const MAX_CHARS = 80000;
+            if (fullContent.length > MAX_CHARS) {
+                codebaseMd = fullContent.substring(0, MAX_CHARS / 2) + "\n\n... [CODE TRUNCATED DUE TO TOKEN LIMITS] ...\n\n" + fullContent.substring(fullContent.length - MAX_CHARS / 2);
+            } else {
+                codebaseMd = fullContent;
+            }
+            fs.unlinkSync(outputFilename);
+          }
+        } catch (e: any) {
+          codebaseMd = "Failed to fetch full codebase. " + e.message;
         }
-      } catch (e) {
-        console.warn("Could not fetch readme", e);
+        return codebaseMd;
+      };
+
+      console.log(`Running analysis...`);
+      // Run sequentially to balance latency vs rate limiting
+      const codebase1 = fetchCodebase(owner, repo);
+      const auditLog1 = await runNpmAudit(owner, repo);
+      
+      let codebase2 = "", auditLog2 = "";
+      if (repoUrl2) {
+        codebase2 = fetchCodebase(owner2, repo2);
+        auditLog2 = await runNpmAudit(owner2, repo2);
       }
 
-      // Fetch codebase summary using repomix
-      let codebaseMd = "Codebase non récupérée.";
-      try {
-        const outputFilename = `repomix-${Date.now()}-${Math.floor(Math.random() * 1000)}.md`;
-        
-        // Exclude common bloated directories to keep the packed file lean
-        const ignorePatterns = "node_modules,dist,build,public,assets,docs,test,tests,coverage,vendor,*.min.js,*.lock,package-lock.json,yarn.lock,pnpm-lock.yaml";
-        
-        console.log(`Running repomix for ${owner}/${repo}...`);
-        execSync(`npx repomix --remote ${owner}/${repo} --style markdown --output ${outputFilename} --ignore "${ignorePatterns}"`, { stdio: 'pipe' });
-        
-        if (fs.existsSync(outputFilename)) {
-          codebaseMd = fs.readFileSync(outputFilename, 'utf-8');
-          fs.unlinkSync(outputFilename);
-        }
-      } catch (e: any) {
-        console.warn("Could not fetch codebase via repomix", e.message);
-        codebaseMd = "Failed to fetch full codebase. " + e.message;
-      }
+      // 3. Prepare Prompt
+      let systemPrompt = `Tu es un Senior Software Engineer spécialisé en SaaS, architecture, et sécurité. Ton objectif est d'auditer un dépôt GitHub basé sur ses métadonnées, son README, les résultats d'npm audit (Sécurité) et l'extrait du code.
+Sois particulièrement intransigeant sur la détection de packages obsolètes, dépréciés, ou non maintenus. Pénalise sévèrement l'utilisation de bibliothèques abandonnées et justifie tes notes dans le rapport.
 
-      // 3. Prepare OpenRouter LLM Call
-      const systemPrompt = `Tu es un Senior Software Engineer spécialisé en SaaS, architecture, et IA. Ton objectif est d'auditer un dépôt GitHub basé sur ses métadonnées, son README, et l'extrait du code.
 Tu DOIS répondre UNIQUEMENT avec un objet JSON pur respectant cette structure, obligatoirement en FRANÇAIS :
 {
   "score": number (0-100),
   "summary": "string (Verdict global concis)",
   "strengths": ["string", "string"],
   "weaknesses": ["string", "string"],
-  "security": { "score": number, "notes": "string (notes détaillées)" },
-  "architecture": { "score": number, "notes": "string (notes détaillées)" },
+  "security": { "score": number, "notes": "string (notes détaillées incluant les vulnérabilités npm audit)" },
+  "architecture": { "score": number, "notes": "string (notes détaillées incluant la vétusté du code/dépendances)" },
   "recommendations": ["string", "string"]
 }
-Ne pas inclure de balises markdown (comme \`\`\`json) ou de texte supplémentaire en dehors du JSON. Les textes doivent être en français.`;
+Ne pas inclure de balises markdown (comme \`\`\`json) ou de texte supplémentaire.`;
 
-      const userPrompt = `Veuillez analyser le dépôt suivant :
-Nom: ${repoData.full_name}
-Description: ${repoData.description || 'Aucune'}
-Étoiles: ${repoData.stargazers_count}
-Forks: ${repoData.forks_count}
-Langage: ${repoData.language}
-Issues ouvertes: ${repoData.open_issues_count}
+      let userPrompt = `=== DÉPÔT À AUDITER ===
+Nom: ${data1.repoData.full_name}
+Description: ${data1.repoData.description || 'Aucune'}
+Étoiles: ${data1.repoData.stargazers_count}
+Forks: ${data1.repoData.forks_count}
+Langage: ${data1.repoData.language}
+Issues ouvertes: ${data1.repoData.open_issues_count}
 
-Extrait du README (4000 premiers caractères) :
-${readmeContent.substring(0, 4000)}
+Résultat NPM Audit (Log de sécurité) :
+${auditLog1.substring(0, 3000)}
+
+Extrait du README :
+${data1.readmeContent.substring(0, 2000)}
 
 Extrait du Code :
-${codebaseMd.substring(0, 80000)}
+${codebase1}
 `;
+
+      if (repoUrl2 && data2) {
+        systemPrompt = `Tu es un Analyste Tech Senior. Ton rôle est de comparer DEUX dépôts GitHub et d'émettre un rapport COMPARATIF sous un seul format JSON en déterminant lequel est la meilleure option de manière objective.
+Sois particulièrement intransigeant sur la détection de packages obsolètes.
+Tu DOIS répondre UNIQUEMENT par JSON pur en FRANÇAIS :
+{
+  "score": number (Score comparatif global, ou moyenne des deux),
+  "summary": "string (Comparaison détaillée: repo A vs repo B, qui est meilleur ?)",
+  "strengths": ["string (A: force)", "string (B: force)"],
+  "weaknesses": ["string (A: faiblesse)", "string (B: faiblesse)"],
+  "security": { "score": number, "notes": "string (Résumé comparatif des vuln npm audit et de la sécurité des deux projets)" },
+  "architecture": { "score": number, "notes": "string (Comparaison architecturale: ex. React Router vs TanStack)" },
+  "recommendations": ["string (Choix final recommandé et pourquoi)"]
+}`;
+        userPrompt += `
+=== 2ÈME DÉPÔT À COMPARER ===
+Nom: ${data2.repoData.full_name}
+Description: ${data2.repoData.description || 'Aucune'}
+
+Résultat NPM Audit (Log) 2:
+${auditLog2.substring(0, 3000)}
+
+Extrait README 2:
+${data2.readmeContent.substring(0, 2000)}
+
+Extrait Code 2:
+${codebase2}
+`;
+      }
 
       let rawContent = "";
       
       try {
         const ai = new GoogleGenAI({ apiKey: geminiApiKey });
-        // Assuming model is "gemini-2.5-flash" or "gemini-2.5-pro"
-        const finalModel = model.startsWith("gemini") ? model : "gemini-2.5-flash";
+        let finalModel = model.startsWith("gemini") ? model : "gemini-2.5-flash";
+        if (repoUrl2) finalModel = "gemini-2.5-pro"; // Better logic handling for comparisons
         
         const response = await ai.models.generateContent({
            model: finalModel,
            contents: [{ role: 'user', parts: [{ text: systemPrompt + '\n\n' + userPrompt }] }]
         });
         rawContent = response.text || "";
-      } catch (e) {
-        console.error("Gemini Error caught:", e);
-        return res.status(500).json({ error: "Erreur de communication avec l'API Gemini. Réessayez plus tard." });
+      } catch (e: any) {
+        return res.status(500).json({ error: "Erreur de communication API IA.", details: e.message });
       }
       
-      // Clean up potential markdown fences if the model ignored instructions
       const cleanJsonStr = rawContent.replace(/^```json/m, '').replace(/^```/m, '').replace(/```$/m, '').trim();
 
       let auditResult;
       try {
         auditResult = JSON.parse(cleanJsonStr);
         auditResult.id = `${owner}-${repo}-${Date.now()}`;
-        auditResult.repoUrl = repoUrl;
+        auditResult.repoUrl = repoUrl2 ? `${repoUrl} VS ${repoUrl2}` : repoUrl;
         auditResult.date = new Date().toISOString();
       } catch (parseError) {
-        console.error("Failed to parse JSON:", rawContent);
         return res.status(500).json({ error: "The AI model returned an invalid response format.", raw: rawContent });
       }
 

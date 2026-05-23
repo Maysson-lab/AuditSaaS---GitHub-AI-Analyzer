@@ -10,11 +10,11 @@ La vision de ce projet est de rendre l'audit des dépôts open-source simple, au
 - [x] Stockage en `localStorage` de l'historique de recherche
 - [x] Ajout de l'affichage en temps réel des métadonnées du dépôt cible (Etoiles, Forks, Langage) via l'API GitHub
 
-## Phase 2 : Robustesse de l'Audit (En cours)
-- [ ] **Détection de code obsolète :** Augmenter le prompt système pour ignorer / détecter avec plus de rigueur les packages très obsolètes.
-- [ ] **Rapports Comparatifs :** Permettre l'audit d'un dépôt *contre* un autre dépôt pour trouver la meilleure option selon un contexte (ex: React Router vs TanStack Router).
-- [ ] **Gestion des Limites de Tokens :** Implémenter le découpage de très grosses bases de code si le contexte dépasse les spécifications `repomix`.
-- [ ] **Tests de sécurité :** Exporter les `package.json` et valider contre la Database de Vulnerabilité (`npm audit`).
+## Phase 2 : Robustesse de l'Audit (Complétée)
+- [x] **Détection de code obsolète :** Augmenter le prompt système pour ignorer / détecter avec plus de rigueur les packages très obsolètes.
+- [x] **Rapports Comparatifs :** Permettre l'audit d'un dépôt *contre* un autre dépôt pour trouver la meilleure option selon un contexte (ex: React Router vs TanStack Router).
+- [x] **Gestion des Limites de Tokens :** Implémenter le découpage de très grosses bases de code si le contexte dépasse les spécifications `repomix` (Tronquage local MAX_CHARS).
+- [x] **Tests de sécurité :** Exporter les `package.json` et valider contre la Database de Vulnerabilité (`npm audit`).
 
 ## Phase 3 : Nouvelles Intégrations API (Court Terme)
 - [ ] Réintégrer `OpenRouter` avec une architecture de Fallback résiliente (Load Balancing de LLM).
